@@ -6,8 +6,8 @@ package com.tzw.growth;
  * <p>后续迁入：GrowthServer / GrowthRouter / GrowthActor / GrowthSessionManager 等组件。
  * 养成系统通过 TCP 长连接处理升级、装备、抽卡、匹配等业务。
  */
-public final class GrowthApplication {
-    private GrowthApplication() {}
+public final class GrowthServer {
+    private GrowthServer() {}
 
     public static void main(String[] args) {
         System.out.println("[growthServer] started (skeleton, Java " + Runtime.version() + ")");
