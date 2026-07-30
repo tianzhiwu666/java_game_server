@@ -1,0 +1,12 @@
+// 占位 proto 文件，后续从 target1 迁入完整的战斗+养成消息定义。
+syntax = "proto3";
+
+package com.tzw.proto;
+
+option java_package = "com.tzw.pb";
+option java_outer_classname = "Message";
+
+// TODO: 迁入完整的消息定义
+message Placeholder {
+  int32 id = 1;
+}
