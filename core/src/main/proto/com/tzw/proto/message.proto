@@ -1,12 +1,222 @@
-// 占位 proto 文件，后续从 target1 迁入完整的战斗+养成消息定义。
 syntax = "proto3";
 
-package com.tzw.proto;
+package pb;
+option go_package = "github.com/byebyebruce/lockstepserver/pb;pb";
+
+//消息ID
+enum ID {
+    MSG_BEGIN = 0;
+    MSG_Connect     = 1;    //连接(客户端发来第一个消息)
+    MSG_Heartbeat   = 2;    //心跳(服务端返回Connect成功之后每隔1秒发送一个心跳包)
+    MSG_JoinRoom    = 10;   //进入
+    MSG_Progress    = 20;   //进度
+    MSG_Ready       = 30;   //准备
+    MSG_Start       = 40;   //开始
+    MSG_Frame       = 50;   //帧数据
+    MSG_Input       = 60;   //输入
+    MSG_Result      = 70;   //结果
+    MSG_Close      = 100;   //房间关闭
+
+    // 养成系统消息（200+ 范围）
+    MSG_GrowthAuth      = 200;  // 养成系统鉴权
+    MSG_PlayerData      = 201;  // 玩家数据同步
+    MSG_UpgradeLevel    = 210;  // 升级
+    MSG_EquipItem       = 211;  // 装备
+    MSG_UnequipItem     = 212;  // 卸下装备
+    MSG_Gacha           = 220;  // 抽卡
+    MSG_Inventory       = 230;  // 背包数据
+    MSG_EnterMatch      = 240;  // 请求匹配
+    MSG_MatchReady      = 241;  // 匹配成功通知
+    MSG_MatchResult     = 242;  // 对战结果推送
+
+    MSG_END = 255;
+}
+
+//错误码
+enum ERRORCODE {
+    ERR_Ok          = 0;    //OK
+    ERR_NoPlayer    = 1;    //没有这个玩家
+    ERR_NoRoom      = 2;    //没有房间
+    ERR_RoomState   = 3;    //房间状态不正确
+    ERR_Token       = 4;    //Token验证失败
+}
+
+//客户端发来的第一个消息
+message C2S_ConnectMsg  {
+    optional uint64 playerID        = 1;    //唯一ID
+    optional uint64 battleID        = 2;    //战斗ID
+	optional string token           = 10;   //令牌
+}
+
+//服务端返回连接结果
+message S2C_ConnectMsg  {
+	optional ERRORCODE errorCode    = 1;    //错误码
+}
+
+//服务端返回进入房间消息
+message S2C_JoinRoomMsg  {
+	optional int32 roomseatid       = 1;   //自己的位置索引id(1~N)
+	repeated uint64 others          = 2;   //其他人的id
+	repeated int32 pros             = 3;   //其他人的进度
+	optional int32 randomSeed       = 4;   //随机种子
+}
+
+//服务端广播开始游戏消息
+message S2C_StartMsg  {
+	optional int64 timeStamp        = 1;   //同步时间戳
+
+}
+
+//读条进度
+message C2S_ProgressMsg  {
+	optional int32 pro              = 1;   //进度值0~100
+}
+
+//读条进度
+message S2C_ProgressMsg  {
+	optional uint64 id              = 1;   //id
+	optional int32 pro              = 2;   //进度值0~100
+}
+
+//操作输入消息
+message C2S_InputMsg  {
+    optional int32 sid              = 1;    //操作id
+    optional int32 x                = 2;    //操作位置x
+    optional int32 y                = 3;    //操作位置y
+    optional uint32 frameID         = 4;    //帧ID
+}
+
+//帧存储操作输入
+message InputData {
+    optional uint64 id              = 1;    //id
+    optional int32 sid              = 2;    //操作id
+    optional int32 x                = 3;    //操作位置x
+    optional int32 y                = 4;    //操作位置y
+    optional int32 roomseatid       = 5;    //操作者的位置索引id(1~N)
+}
+
+//帧数据
+message FrameData {
+    optional uint32 frameID          = 1;   //帧ID
+    repeated InputData input         = 2;   //操作输入
+}
+
+//广播帧消息
+message S2C_FrameMsg {
+    repeated FrameData frames        = 1;   //帧数据
+}
+
+//结果消息
+message C2S_ResultMsg {
+    optional uint64 winnerID          = 1; //胜利者ID
+}
+
+// ==================== 养成系统消息 ====================
+
+// 养成系统鉴权（TCP 连接后的第一个消息）
+message C2S_GrowthAuthMsg {
+    optional uint64 playerID         = 1;    // 玩家 ID
+    optional string token           = 2;    // 令牌
+}
+
+// 养成系统鉴权响应
+message S2C_GrowthAuthMsg {
+    optional ERRORCODE errorCode    = 1;    // 错误码
+    optional uint64 playerID        = 2;    // 玩家 ID
+}
+
+// 玩家数据同步
+message S2C_PlayerDataMsg {
+    optional uint64 playerID         = 1;
+    optional int32  level           = 2;
+    optional int64  exp             = 3;
+    optional int64  gold            = 4;
+    optional int32  attack          = 5;
+    optional int32  curEquipItemID  = 6;    // 当前装备的物品 ID（0 表示未装备）
+    repeated Item   items           = 7;    // 背包物品
+}
+
+// 物品
+message Item {
+    optional uint64 itemID           = 1;
+    optional string name             = 2;
+    optional int32  count           = 3;
+    optional int32  attackBonus     = 4;    // 攻击力加成
+}
+
+// 升级
+message C2S_UpgradeLevelMsg {
+    optional int32 targetLevel      = 1;    // 目标等级
+}
+
+message S2C_UpgradeLevelMsg {
+    optional bool   success         = 1;
+    optional int32  newLevel        = 2;
+    optional int64  remainGold      = 3;
+    optional int32  newAttack       = 4;
+    optional ERRORCODE errorCode    = 5;
+}
+
+// 装备
+message C2S_EquipItemMsg {
+    optional uint64 itemID           = 1;
+}
+
+message S2C_EquipItemMsg {
+    optional bool   success         = 1;
+    optional uint64 itemID          = 2;
+    optional int32  newAttack       = 3;
+    optional ERRORCODE errorCode    = 4;
+}
+
+// 卸下装备
+message C2S_UnequipItemMsg {
+    optional uint64 itemID           = 1;
+}
+
+message S2C_UnequipItemMsg {
+    optional bool   success         = 1;
+    optional int32  newAttack       = 2;
+    optional ERRORCODE errorCode    = 3;
+}
+
+// 抽卡
+message C2S_GachaMsg {
+    optional int32 times            = 1;    // 1=单抽, 10=十连
+}
+
+message S2C_GachaMsg {
+    repeated Item   items           = 1;
+    optional int64  remainGold      = 2;
+    optional ERRORCODE errorCode    = 3;
+}
+
+// 背包数据
+message S2C_InventoryMsg {
+    repeated Item   items           = 1;
+}
+
+// 请求匹配
+message C2S_EnterMatchMsg {
+    optional int32 mode             = 1;    // 匹配模式（1=单人匹配）
+}
+
+// 匹配成功通知
+message S2C_MatchReadyMsg {
+    optional string roomHost        = 1;
+    optional int32  roomPort        = 2;
+    optional string token           = 3;
+    optional uint64 roomID          = 4;
+}
+
+// 对战结果推送
+message S2C_MatchResultMsg {
+    optional uint64 roomID          = 1;
+    optional bool   win             = 2;
+    optional int64  expGain         = 3;
+    optional int64  goldGain        = 4;
+    optional int32  newLevel        = 5;
+}
 
 option java_package = "com.tzw.pb";
 option java_outer_classname = "Message";
-
-// TODO: 迁入完整的消息定义
-message Placeholder {
-  int32 id = 1;
-}
