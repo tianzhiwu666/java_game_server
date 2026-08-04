@@ -2,9 +2,9 @@ package com.tzw.battle;
 
 import com.tzw.config.LockstepProperties;
 import com.tzw.logic.RoomManager;
-import com.tzw.mq.EventBus;
-import com.tzw.mq.InMemoryMqAdapter;
+import com.tzw.logic.match.MatchService;
 import com.tzw.mq.MqProducer;
+import com.tzw.mq.RedisStreamMqAdapter;
 import com.tzw.mq.TypedMqConsumer;
 import com.tzw.network.Server;
 import com.tzw.network.ServerConfig;
@@ -39,6 +39,8 @@ public final class BattleServer {
 
     private Server udpServer;
     private RoomManager roomManager;
+    private MatchService matchService;
+    private RedisStreamMqAdapter mqAdapter;
     private int port;
 
     private BattleServer() {}
@@ -55,11 +57,12 @@ public final class BattleServer {
         // 1. 创建配置（默认值与 target1 一致）
         LockstepProperties properties = new LockstepProperties();
 
-        // 2. 创建 MQ 组件（进程内实现，可替换为 Redis）
-        InMemoryMqAdapter mqAdapter = new InMemoryMqAdapter();
+        // 2. 创建 MQ 组件（真实 MQ：Redis Stream，跨进程通信）
+        RedisStreamMqAdapter mqAdapter = RedisStreamMqAdapter.fromEnv();
+        log.info("[battleServer] Redis MQ url: {}", mqAdapter.redisUri());
         MqProducer mqProducer = mqAdapter;
         TypedMqConsumer mqConsumer = mqAdapter;
-        EventBus eventBus = new EventBus();
+        this.mqAdapter = mqAdapter;
 
         // 3. 创建房间管理器
         roomManager = new RoomManager(properties);
@@ -71,7 +74,10 @@ public final class BattleServer {
         // 5. 创建路由器（第一层消息分发：Connect 握手 + 心跳）
         Router router = new Router(lockStepServer);
 
-        // 6. 创建并启动 KCP/UDP 服务器
+        // 6. 创建匹配服务（订阅 match.create → 建房间 → 回报 match.ready / match.result）
+        matchService = new MatchService(roomManager, mqProducer, mqConsumer, "127.0.0.1", port);
+
+        // 7. 创建并启动 KCP/UDP 服务器
         ServerConfig udpConfig = new ServerConfig();
         udpConfig.setPacketSendChanLimit(1024);
         udpConfig.setPacketReceiveChanLimit(1024);
@@ -88,6 +94,12 @@ public final class BattleServer {
         log.info("[battleServer] stopping...");
         if (roomManager != null) {
             roomManager.stop();
+        }
+        if (matchService != null) {
+            matchService.close();
+        }
+        if (mqAdapter != null) {
+            mqAdapter.close();
         }
         if (udpServer != null) {
             udpServer.stop();

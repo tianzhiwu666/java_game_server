@@ -59,16 +59,20 @@ public class RoomManager {
     /** 配置对象，传递给每个房间 */
     private final LockstepProperties properties;
 
-    /** 房间对战结束回调（由 MatchService 设置） */
-    private static volatile java.util.function.BiConsumer<Long, Boolean> gameOverCallback;
+    /**
+     * 房间对战结束回调（由 MatchService 设置）。
+     * 参数：roomId + 玩家提交的胜负结果映射（playerId → winnerID）。
+     */
+    private static volatile java.util.function.BiConsumer<Long, java.util.Map<Long, Long>> gameOverCallback;
 
     /** 设置对战结束回调 */
-    public static void setGameOverCallback(java.util.function.BiConsumer<Long, Boolean> callback) {
+    public static void setGameOverCallback(
+            java.util.function.BiConsumer<Long, java.util.Map<Long, Long>> callback) {
         gameOverCallback = callback;
     }
 
     /** 获取对战结束回调 */
-    public static java.util.function.BiConsumer<Long, Boolean> getGameOverCallback() {
+    public static java.util.function.BiConsumer<Long, java.util.Map<Long, Long>> getGameOverCallback() {
         return gameOverCallback;
     }
 

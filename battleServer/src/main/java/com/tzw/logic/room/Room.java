@@ -1,6 +1,7 @@
 package com.tzw.logic.room;
 
 import com.tzw.config.LockstepProperties;
+import com.tzw.logic.RoomManager;
 import com.tzw.logic.game.Game;
 import com.tzw.logic.game.GameListener;
 import com.tzw.network.Conn;
@@ -289,6 +290,15 @@ public class Room implements ConnCallback, GameListener {
     @Override
     public void onGameOver(long roomId) {
         closed.set(true);
+        // 通知匹配服务：携带所有玩家提交的胜负结果（playerId → winnerID）
+        var callback = RoomManager.getGameOverCallback();
+        if (callback != null) {
+            try {
+                callback.accept(roomId, game.getResult());
+            } catch (Exception e) {
+                log.error("[room({})] game over callback error: {}", roomId, e.getMessage(), e);
+            }
+        }
         log.warn("[room({})] onGameOver {}", roomId);
     }
 

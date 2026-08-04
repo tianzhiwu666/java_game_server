@@ -1,8 +1,8 @@
 package com.tzw.growth;
 
 import com.tzw.mq.EventBus;
-import com.tzw.mq.InMemoryMqAdapter;
 import com.tzw.mq.MqProducer;
+import com.tzw.mq.RedisStreamMqAdapter;
 import com.tzw.mq.TypedMqConsumer;
 import com.tzw.network.ServerConfig;
 import com.tzw.server.GrowthRouter;
@@ -35,6 +35,7 @@ public final class GrowthServer {
 
     private TcpServer tcpServer;
     private GrowthSessionManager sessionManager;
+    private RedisStreamMqAdapter mqAdapter;
 
     private GrowthServer() {}
 
@@ -46,11 +47,13 @@ public final class GrowthServer {
     public void start(int port) {
         log.info("[growthServer] starting on port {} (Java {})", port, Runtime.version());
 
-        // 1. 创建 MQ 组件（进程内实现，可替换为 Redis）
-        InMemoryMqAdapter mqAdapter = new InMemoryMqAdapter();
+        // 1. 创建 MQ 组件（真实 MQ：Redis Stream，跨进程通信）
+        RedisStreamMqAdapter mqAdapter = RedisStreamMqAdapter.fromEnv();
         MqProducer mqProducer = mqAdapter;
         TypedMqConsumer mqConsumer = mqAdapter;
         EventBus eventBus = new EventBus();
+        this.mqAdapter = mqAdapter;
+        log.info("[growthServer] Redis MQ url: {}", mqAdapter.redisUri());
 
         // 2. 创建网络配置
         ServerConfig config = new ServerConfig();
@@ -75,6 +78,9 @@ public final class GrowthServer {
         log.info("[growthServer] stopping...");
         if (sessionManager != null) {
             sessionManager.stop();
+        }
+        if (mqAdapter != null) {
+            mqAdapter.close();
         }
         if (tcpServer != null) {
             tcpServer.stop();
