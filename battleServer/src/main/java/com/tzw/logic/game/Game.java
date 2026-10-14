@@ -591,40 +591,10 @@ public class Game {
                 .build();
         p.sendMessage(MsgPacket.newInstance((byte) Message.ID.MSG_Start_VALUE, startMsg));
 
-        // 2. 批量重放所有历史帧
-        long framesCount = clientFrameCount;
+        // 2. 批量重放所有历史帧（打包语义见 FrameBatchPacker）
         int maxPerMsg = properties.getGame().getMaxFrameDataPerMsg();
-        int count = 0;
-        Message.S2C_FrameMsg.Builder frameMsg = Message.S2C_FrameMsg.newBuilder();
-
-        for (long i = 0; i < framesCount; i++) {
-            Lockstep.FrameData frameData = lockstep.getFrame(i);
-            if (frameData == null && i != (framesCount - 1)) {
-                continue;
-            }
-
-            Message.FrameData fd = Message.FrameData.newBuilder()
-                    .setFrameID((int) i)
-                    .build();
-
-            if (frameData != null) {
-                Message.FrameData fdWithInput = Message.FrameData.newBuilder()
-                        .setFrameID((int) i)
-                        .addAllInput(frameData.cmds)
-                        .build();
-                frameMsg.addFrames(fdWithInput);
-            } else {
-                frameMsg.addFrames(fd);
-            }
-            count++;
-
-            // 每 maxPerMsg 帧或最后一帧发送一次
-            if (count >= maxPerMsg || i == (framesCount - 1)) {
-                p.sendMessage(MsgPacket.newInstance((byte) Message.ID.MSG_Frame_VALUE, frameMsg.build()));
-                count = 0;
-                frameMsg = Message.S2C_FrameMsg.newBuilder();
-            }
-        }
+        FrameBatchPacker.pack(lockstep, 0, clientFrameCount, maxPerMsg,
+                m -> p.sendMessage(MsgPacket.newInstance((byte) Message.ID.MSG_Frame_VALUE, m)));
 
         // 3. 更新玩家的帧游标
         p.setSendFrameCount(clientFrameCount);
@@ -683,33 +653,9 @@ public class Game {
                 continue;
             }
 
-            // 从该玩家的帧游标开始发送
-            long i = p.getSendFrameCount();
-            int count = 0;
-            Message.S2C_FrameMsg.Builder msg = Message.S2C_FrameMsg.newBuilder();
-
-            for (; i < framesCount; i++) {
-                Lockstep.FrameData frameData = lockstep.getFrame(i);
-                // 跳过无输入的帧（除非是最后一帧）
-                if (frameData == null && i != (framesCount - 1)) {
-                    continue;
-                }
-
-                Message.FrameData.Builder fd = Message.FrameData.newBuilder()
-                        .setFrameID((int) i);
-                if (frameData != null) {
-                    fd.addAllInput(frameData.cmds);
-                }
-                msg.addFrames(fd.build());
-                count++;
-
-                // 每 maxPerMsg 帧或最后一帧发送一次
-                if (i == (framesCount - 1) || count >= maxPerMsg) {
-                    p.sendMessage(MsgPacket.newInstance((byte) Message.ID.MSG_Frame_VALUE, msg.build()));
-                    count = 0;
-                    msg = Message.S2C_FrameMsg.newBuilder();
-                }
-            }
+            // 从该玩家的帧游标开始发送（打包语义见 FrameBatchPacker）
+            FrameBatchPacker.pack(lockstep, p.getSendFrameCount(), framesCount, maxPerMsg,
+                    m -> p.sendMessage(MsgPacket.newInstance((byte) Message.ID.MSG_Frame_VALUE, m)));
 
             // 更新玩家的帧游标
             p.setSendFrameCount(framesCount);
