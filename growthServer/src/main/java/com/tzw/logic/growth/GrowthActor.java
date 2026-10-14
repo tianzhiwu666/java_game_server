@@ -1,8 +1,9 @@
 package com.tzw.logic.growth;
 
 import com.tzw.logic.growth.handler.EquipHandler;
+import com.tzw.logic.growth.handler.GachaHandler;
+import com.tzw.logic.growth.handler.MatchHandler;
 import com.tzw.logic.growth.handler.UpgradeHandler;
-import com.tzw.mq.MatchCreateEvent;
 import com.tzw.mq.MatchReadyEvent;
 import com.tzw.mq.MatchResultEvent;
 import com.tzw.mq.MqProducer;
@@ -11,12 +12,10 @@ import com.tzw.network.ConnCallback;
 import com.tzw.network.Packet;
 import com.tzw.packet.MsgPacket;
 import com.tzw.pb.Message;
-import com.tzw.pb.Message.Item;
 import com.tzw.server.GrowthRouter.GrowthEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Random;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -87,19 +86,20 @@ public class GrowthActor implements Runnable, ConnCallback {
     /** Actor 是否已关闭（AtomicBoolean 因为被 GrowthRouter 跨线程读取） */
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
-    /** 随机数生成器（用于抽卡） */
-    private final Random random = new Random();
+    /** 抽卡业务处理器 */
+    private final GachaHandler gachaHandler;
 
-    /** MQ 发布者（实例变量，由构造函数注入） */
-    private final MqProducer mqProducer;
+    /** 匹配业务处理器 */
+    private final MatchHandler matchHandler;
 
     public GrowthActor(long playerId, MqProducer mqProducer) {
         this.playerId = playerId;
-        this.mqProducer = mqProducer;
         this.state = new PlayerGrowthState(playerId);
         this.messenger = new GrowthMessenger(playerId, state);
         this.upgradeHandler = new UpgradeHandler(playerId, state, messenger);
         this.equipHandler = new EquipHandler(playerId, state, messenger);
+        this.gachaHandler = new GachaHandler(playerId, state, messenger);
+        this.matchHandler = new MatchHandler(playerId, state, messenger, mqProducer);
     }
 
     // ==================== Getter ====================
@@ -283,10 +283,10 @@ public class GrowthActor implements Runnable, ConnCallback {
             case MSG_UpgradeLevel -> upgradeHandler.handle(msg);
             case MSG_EquipItem -> equipHandler.handleEquip(msg);
             case MSG_UnequipItem -> equipHandler.handleUnequip(msg);
-            case MSG_Gacha -> handleGacha(msg);
+            case MSG_Gacha -> gachaHandler.handle(msg);
             case MSG_PlayerData -> messenger.pushPlayerData();
             case MSG_Inventory -> messenger.pushInventory();
-            case MSG_EnterMatch -> handleEnterMatch(msg);
+            case MSG_EnterMatch -> matchHandler.handleEnterMatch();
             case MSG_Heartbeat -> handleHeartbeat();
             default -> log.warn("[GrowthActor-{}] unknown message id[{}]", playerId, msgId);
         }
@@ -303,12 +303,12 @@ public class GrowthActor implements Runnable, ConnCallback {
         switch (event.type()) {
             case "match.ready" -> {
                 if (event.payload() instanceof MatchReadyEvent e) {
-                    handleMatchReady(e);
+                    matchHandler.handleMatchReady(e);
                 }
             }
             case "match.result" -> {
                 if (event.payload() instanceof MatchResultEvent e) {
-                    handleMatchResult(e);
+                    matchHandler.handleMatchResult(e);
                 }
             }
             case "conn.close" -> {
@@ -318,171 +318,13 @@ public class GrowthActor implements Runnable, ConnCallback {
         }
     }
 
-    /**
-     * 处理匹配成功事件 — 通知客户端进入战斗
-     *
-     * @param event 匹配就绪事件
-     */
-    private void handleMatchReady(MatchReadyEvent event) {
-        log.info("[GrowthActor-{}] match ready: roomId={}, token={}", playerId, event.roomId(), event.token());
-
-        // 推送匹配成功消息给客户端
-        Message.S2C_MatchReadyMsg matchReady = Message.S2C_MatchReadyMsg.newBuilder()
-                .setRoomHost(event.roomHost())
-                .setRoomPort(event.roomPort())
-                .setToken(event.token())
-                .setRoomID(event.roomId())
-                .build();
-        messenger.send(MsgPacket.newInstance((byte) Message.ID.MSG_MatchReady_VALUE, matchReady));
-    }
-
     // ==================== 业务处理 ====================
-
-    /**
-     * 处理抽卡请求
-     */
-    private void handleGacha(MsgPacket msg) {
-        try {
-            Message.C2S_GachaMsg req = msg.unmarshal(
-                    Message.C2S_GachaMsg.getDefaultInstance());
-            int times = req.getTimes();
-
-            // 只支持单抽和十连
-            if (times != 1 && times != 10) {
-                sendGachaResult(java.util.Collections.emptyList(), state.getGold(),
-                        Message.ERRORCODE.ERR_RoomState);
-                return;
-            }
-
-            // 计算费用
-            long cost = times == 1 ? 100 : 900;
-
-            if (!state.spendGold(cost)) {
-                sendGachaResult(java.util.Collections.emptyList(), state.getGold(),
-                        Message.ERRORCODE.ERR_RoomState);
-                return;
-            }
-
-            // 抽卡逻辑
-            java.util.List<Item> items = new java.util.ArrayList<>();
-            for (int i = 0; i < times; i++) {
-                Item item = rollGacha();
-                state.addItem(item);
-                items.add(item);
-            }
-
-            log.info("[GrowthActor-{}] gacha times={}, cost={}", playerId, times, cost);
-
-            sendGachaResult(items, state.getGold(), Message.ERRORCODE.ERR_Ok);
-
-        } catch (Exception e) {
-            log.error("[GrowthActor-{}] handleGacha error: {}", playerId, e.getMessage());
-        }
-    }
-
-    /**
-     * 抽卡随机逻辑
-     *
-     * @return 抽到的物品
-     */
-    private Item rollGacha() {
-        int rarity = random.nextInt(100);
-        long itemId;
-        String name;
-        int attackBonus;
-
-        if (rarity < 5) {
-            // 5% 传说
-            itemId = 1001;
-            name = "传说武器";
-            attackBonus = 50;
-        } else if (rarity < 20) {
-            // 15% 史诗
-            itemId = 1002;
-            name = "史诗武器";
-            attackBonus = 30;
-        } else if (rarity < 50) {
-            // 30% 稀有
-            itemId = 1003;
-            name = "稀有武器";
-            attackBonus = 15;
-        } else {
-            // 50% 普通
-            itemId = 1004;
-            name = "普通武器";
-            attackBonus = 5;
-        }
-
-        return Item.newBuilder()
-                .setItemID(itemId)
-                .setName(name)
-                .setCount(1)
-                .setAttackBonus(attackBonus)
-                .build();
-    }
-
-    private void sendGachaResult(java.util.List<Item> items, long remainGold,
-                                  Message.ERRORCODE errorCode) {
-        Message.S2C_GachaMsg response = Message.S2C_GachaMsg.newBuilder()
-                .addAllItems(items)
-                .setRemainGold(remainGold)
-                .setErrorCode(errorCode)
-                .build();
-        messenger.send(MsgPacket.newInstance((byte) Message.ID.MSG_Gacha_VALUE, response));
-    }
-
-    /**
-     * 处理进入匹配请求
-     *
-     * <p>发布 MatchCreateEvent 到 MQ，战斗服务订阅后创建房间。
-     */
-    private void handleEnterMatch(MsgPacket msg) {
-        log.info("[GrowthActor-{}] enter match", playerId);
-
-        // 发布匹配请求到 MQ
-        if (mqProducer != null) {
-            MatchCreateEvent event = new MatchCreateEvent(playerId, 1);
-            mqProducer.send("match.create", event);
-            log.info("[GrowthActor-{}] published match.create event", playerId);
-        } else {
-            log.warn("[GrowthActor-{}] mqProducer not available", playerId);
-        }
-    }
 
     /**
      * 处理心跳
      */
     private void handleHeartbeat() {
         messenger.send(MsgPacket.newInstance((byte) Message.ID.MSG_Heartbeat_VALUE, (Object) null));
-    }
-
-    /**
-     * 处理对战结果 —— 发放奖励
-     *
-     * @param event 对战结果事件
-     */
-    private void handleMatchResult(MatchResultEvent event) {
-        log.info("[GrowthActor-{}] match result: win={}, exp={}, gold={}",
-                playerId, event.win(), event.expGain(), event.goldGain());
-
-        // 发放奖励
-        state.addExp(event.expGain());
-        state.addGold(event.goldGain());
-
-        // 检查升级
-        while (state.tryLevelUp()) {
-            log.info("[GrowthActor-{}] auto level up to {}", playerId, state.getLevel());
-        }
-
-        // 推送结算给客户端
-        Message.S2C_MatchResultMsg result = Message.S2C_MatchResultMsg.newBuilder()
-                .setRoomID(event.roomId())
-                .setWin(event.win())
-                .setExpGain(event.expGain())
-                .setGoldGain(event.goldGain())
-                .setNewLevel(state.getLevel())
-                .build();
-        messenger.send(MsgPacket.newInstance((byte) Message.ID.MSG_MatchResult_VALUE, result));
     }
 
     // ==================== 数据持久化 ====================
