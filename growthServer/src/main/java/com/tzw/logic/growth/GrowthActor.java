@@ -1,5 +1,7 @@
 package com.tzw.logic.growth;
 
+import com.tzw.logic.growth.handler.EquipHandler;
+import com.tzw.logic.growth.handler.UpgradeHandler;
 import com.tzw.mq.MatchCreateEvent;
 import com.tzw.mq.MatchReadyEvent;
 import com.tzw.mq.MatchResultEvent;
@@ -67,8 +69,14 @@ public class GrowthActor implements Runnable, ConnCallback {
     /** 玩家养成状态 */
     private final PlayerGrowthState state;
 
-    /** 当前 TCP 连接（可能为空：玩家可能暂时断线） */
-    private volatile Conn conn;
+    /** 发送职责：持有当前 TCP 连接（可能为空：玩家可能暂时断线） */
+    private final GrowthMessenger messenger;
+
+    /** 升级业务处理器 */
+    private final UpgradeHandler upgradeHandler;
+
+    /** 装备业务处理器 */
+    private final EquipHandler equipHandler;
 
     /** 事件循环线程引用 */
     private volatile Thread loopThread;
@@ -89,6 +97,9 @@ public class GrowthActor implements Runnable, ConnCallback {
         this.playerId = playerId;
         this.mqProducer = mqProducer;
         this.state = new PlayerGrowthState(playerId);
+        this.messenger = new GrowthMessenger(playerId, state);
+        this.upgradeHandler = new UpgradeHandler(playerId, state, messenger);
+        this.equipHandler = new EquipHandler(playerId, state, messenger);
     }
 
     // ==================== Getter ====================
@@ -218,19 +229,17 @@ public class GrowthActor implements Runnable, ConnCallback {
                 // 2. 处理新连接
                 Conn in = inChan.poll();
                 if (in != null) {
-                    this.conn = in;
                     log.info("[GrowthActor-{}] player connected", playerId);
+                    messenger.bind(in);
                     // 推送当前数据给客户端
-                    pushPlayerData();
+                    messenger.pushPlayerData();
                 }
 
                 // 3. 处理连接离开
                 Conn out = outChan.poll();
                 if (out != null) {
                     log.info("[GrowthActor-{}] player disconnected", playerId);
-                    if (this.conn == out) {
-                        this.conn = null;
-                    }
+                    messenger.unbind(out);
                 }
 
                 // 4. 处理系统事件
@@ -271,12 +280,12 @@ public class GrowthActor implements Runnable, ConnCallback {
         log.info("[GrowthActor-{}] processMsg msg=[{}]", playerId, msgId);
 
         switch (msgId) {
-            case MSG_UpgradeLevel -> handleUpgrade(msg);
-            case MSG_EquipItem -> handleEquip(msg);
-            case MSG_UnequipItem -> handleUnequip(msg);
+            case MSG_UpgradeLevel -> upgradeHandler.handle(msg);
+            case MSG_EquipItem -> equipHandler.handleEquip(msg);
+            case MSG_UnequipItem -> equipHandler.handleUnequip(msg);
             case MSG_Gacha -> handleGacha(msg);
-            case MSG_PlayerData -> pushPlayerData();
-            case MSG_Inventory -> pushInventory();
+            case MSG_PlayerData -> messenger.pushPlayerData();
+            case MSG_Inventory -> messenger.pushInventory();
             case MSG_EnterMatch -> handleEnterMatch(msg);
             case MSG_Heartbeat -> handleHeartbeat();
             default -> log.warn("[GrowthActor-{}] unknown message id[{}]", playerId, msgId);
@@ -324,132 +333,10 @@ public class GrowthActor implements Runnable, ConnCallback {
                 .setToken(event.token())
                 .setRoomID(event.roomId())
                 .build();
-        send(MsgPacket.newInstance((byte) Message.ID.MSG_MatchReady_VALUE, matchReady));
+        messenger.send(MsgPacket.newInstance((byte) Message.ID.MSG_MatchReady_VALUE, matchReady));
     }
 
     // ==================== 业务处理 ====================
-
-    /**
-     * 处理升级请求
-     */
-    private void handleUpgrade(MsgPacket msg) {
-        try {
-            Message.C2S_UpgradeLevelMsg req = msg.unmarshal(
-                    Message.C2S_UpgradeLevelMsg.getDefaultInstance());
-            int targetLevel = req.getTargetLevel();
-
-            // 校验目标等级
-            if (targetLevel <= state.getLevel() || targetLevel > state.getLevel() + 1) {
-                sendUpgradeResult(false, state.getLevel(), state.getGold(), state.getTotalAttack(),
-                        Message.ERRORCODE.ERR_RoomState);
-                return;
-            }
-
-            // 计算升级费用
-            long cost = PlayerGrowthState.getRequiredExp(state.getLevel());
-
-            // 消费金币
-            if (!state.spendGold(cost)) {
-                sendUpgradeResult(false, state.getLevel(), state.getGold(), state.getTotalAttack(),
-                        Message.ERRORCODE.ERR_RoomState);
-                return;
-            }
-
-            // 执行升级
-            state.setLevel(state.getLevel() + 1);
-            state.setBaseAttack(state.getBaseAttack() + 5);
-
-            log.info("[GrowthActor-{}] upgrade to level={}, cost={}", playerId, state.getLevel(), cost);
-
-            sendUpgradeResult(true, state.getLevel(), state.getGold(), state.getTotalAttack(),
-                    Message.ERRORCODE.ERR_Ok);
-
-        } catch (Exception e) {
-            log.error("[GrowthActor-{}] handleUpgrade error: {}", playerId, e.getMessage());
-        }
-    }
-
-    private void sendUpgradeResult(boolean success, int newLevel, long remainGold,
-                                    int newAttack, Message.ERRORCODE errorCode) {
-        Message.S2C_UpgradeLevelMsg response = Message.S2C_UpgradeLevelMsg.newBuilder()
-                .setSuccess(success)
-                .setNewLevel(newLevel)
-                .setRemainGold(remainGold)
-                .setNewAttack(newAttack)
-                .setErrorCode(errorCode)
-                .build();
-        send(MsgPacket.newInstance((byte) Message.ID.MSG_UpgradeLevel_VALUE, response));
-    }
-
-    /**
-     * 处理装备请求
-     */
-    private void handleEquip(MsgPacket msg) {
-        try {
-            Message.C2S_EquipItemMsg req = msg.unmarshal(
-                    Message.C2S_EquipItemMsg.getDefaultInstance());
-            long itemId = req.getItemID();
-
-            if (!state.hasItem(itemId, 1)) {
-                sendEquipResult(false, itemId, state.getTotalAttack(),
-                        Message.ERRORCODE.ERR_RoomState);
-                return;
-            }
-
-            state.equipItem(itemId);
-            log.info("[GrowthActor-{}] equip item={}", playerId, itemId);
-
-            sendEquipResult(true, itemId, state.getTotalAttack(), Message.ERRORCODE.ERR_Ok);
-
-        } catch (Exception e) {
-            log.error("[GrowthActor-{}] handleEquip error: {}", playerId, e.getMessage());
-        }
-    }
-
-    private void sendEquipResult(boolean success, long itemId, int newAttack,
-                                  Message.ERRORCODE errorCode) {
-        Message.S2C_EquipItemMsg response = Message.S2C_EquipItemMsg.newBuilder()
-                .setSuccess(success)
-                .setItemID(itemId)
-                .setNewAttack(newAttack)
-                .setErrorCode(errorCode)
-                .build();
-        send(MsgPacket.newInstance((byte) Message.ID.MSG_EquipItem_VALUE, response));
-    }
-
-    /**
-     * 处理卸下装备请求
-     */
-    private void handleUnequip(MsgPacket msg) {
-        try {
-            Message.C2S_UnequipItemMsg req = msg.unmarshal(
-                    Message.C2S_UnequipItemMsg.getDefaultInstance());
-            long itemId = req.getItemID();
-
-            if (state.getEquippedItemId() != itemId) {
-                sendUnequipResult(false, state.getTotalAttack(),
-                        Message.ERRORCODE.ERR_RoomState);
-                return;
-            }
-
-            state.unequipItem();
-            log.info("[GrowthActor-{}] unequip item={}", playerId, itemId);
-
-            sendUnequipResult(true, state.getTotalAttack(), Message.ERRORCODE.ERR_Ok);
-
-        } catch (Exception e) {
-            log.error("[GrowthActor-{}] handleUnequip error: {}", playerId, e.getMessage());
-        }
-    }
-
-    private void sendUnequipResult(boolean success, int newAttack, Message.ERRORCODE errorCode) {
-        Message.S2C_UnequipItemMsg response = Message.S2C_UnequipItemMsg.newBuilder()
-                .setSuccess(success)
-                .setNewAttack(newAttack)
-                .setErrorCode(errorCode)
-                .build();
-        send(MsgPacket.newInstance((byte) Message.ID.MSG_UnequipItem_VALUE, response));
-    }
 
     /**
      * 处理抽卡请求
@@ -541,7 +428,7 @@ public class GrowthActor implements Runnable, ConnCallback {
                 .setRemainGold(remainGold)
                 .setErrorCode(errorCode)
                 .build();
-        send(MsgPacket.newInstance((byte) Message.ID.MSG_Gacha_VALUE, response));
+        messenger.send(MsgPacket.newInstance((byte) Message.ID.MSG_Gacha_VALUE, response));
     }
 
     /**
@@ -566,7 +453,7 @@ public class GrowthActor implements Runnable, ConnCallback {
      * 处理心跳
      */
     private void handleHeartbeat() {
-        send(MsgPacket.newInstance((byte) Message.ID.MSG_Heartbeat_VALUE, (Object) null));
+        messenger.send(MsgPacket.newInstance((byte) Message.ID.MSG_Heartbeat_VALUE, (Object) null));
     }
 
     /**
@@ -595,7 +482,7 @@ public class GrowthActor implements Runnable, ConnCallback {
                 .setGoldGain(event.goldGain())
                 .setNewLevel(state.getLevel())
                 .build();
-        send(MsgPacket.newInstance((byte) Message.ID.MSG_MatchResult_VALUE, result));
+        messenger.send(MsgPacket.newInstance((byte) Message.ID.MSG_MatchResult_VALUE, result));
     }
 
     // ==================== 数据持久化 ====================
@@ -613,37 +500,6 @@ public class GrowthActor implements Runnable, ConnCallback {
         // TODO 写入 Redis
         log.info("[GrowthActor-{}] save data: level={}, gold={}", playerId, state.getLevel(), state.getGold());
         state.clearDirty();
-    }
-
-    // ==================== 辅助方法 ====================
-
-    /**
-     * 推送玩家数据给客户端
-     */
-    private void pushPlayerData() {
-        send(MsgPacket.newInstance((byte) Message.ID.MSG_PlayerData_VALUE,
-                state.toProto().build()));
-    }
-
-    /**
-     * 推送背包数据给客户端
-     */
-    private void pushInventory() {
-        Message.S2C_InventoryMsg inventory = Message.S2C_InventoryMsg.newBuilder()
-                .addAllItems(state.getInventory().values())
-                .build();
-        send(MsgPacket.newInstance((byte) Message.ID.MSG_Inventory_VALUE, inventory));
-    }
-
-    /**
-     * 发送消息给客户端
-     *
-     * @param msg 消息包
-     */
-    private void send(MsgPacket msg) {
-        if (conn != null && !conn.isClosed()) {
-            conn.asyncWrite(msg);
-        }
     }
 
     /**
