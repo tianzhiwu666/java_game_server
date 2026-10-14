@@ -5,6 +5,7 @@ import com.tzw.mq.EventBus;
 import com.tzw.mq.MatchReadyEvent;
 import com.tzw.mq.MatchResultEvent;
 import com.tzw.mq.MqProducer;
+import com.tzw.mq.MqTopics;
 import com.tzw.mq.TypedMqConsumer;
 import com.tzw.network.Conn;
 import com.tzw.network.ConnCallback;
@@ -79,17 +80,17 @@ public class GrowthRouter implements ConnCallback {
      */
     private void subscribeMatchEvents() {
         // 订阅匹配成功事件（战斗服务 → 养成服务）
-        mqConsumer.subscribeTyped("match.ready", MatchReadyEvent.class, event -> {
+        mqConsumer.subscribeTyped(MqTopics.MATCH_READY, MatchReadyEvent.class, event -> {
             log.info("[GrowthRouter] match.ready: playerId={}, roomId={}", event.playerId(), event.roomId());
             // 通知客户端房间就绪
-            sessionManager.dispatch(event.playerId(), new GrowthEvent("match.ready", event));
+            sessionManager.dispatch(event.playerId(), new GrowthEvent(MqTopics.MATCH_READY, event));
         });
 
         // 订阅对战结果事件（战斗服务 → 养成服务）
-        mqConsumer.subscribeTyped("match.result", MatchResultEvent.class, event -> {
+        mqConsumer.subscribeTyped(MqTopics.MATCH_RESULT, MatchResultEvent.class, event -> {
             log.info("[GrowthRouter] match.result: playerId={}, win={}", event.playerId(), event.win());
             // 路由到 GrowthActor 处理奖励
-            sessionManager.dispatch(event.playerId(), new GrowthEvent("match.result", event));
+            sessionManager.dispatch(event.playerId(), new GrowthEvent(MqTopics.MATCH_RESULT, event));
         });
 
         log.info("[GrowthRouter] subscribed to match.ready and match.result via MQ");

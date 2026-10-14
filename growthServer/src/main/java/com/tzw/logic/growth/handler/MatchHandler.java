@@ -6,6 +6,7 @@ import com.tzw.mq.MatchCreateEvent;
 import com.tzw.mq.MatchReadyEvent;
 import com.tzw.mq.MatchResultEvent;
 import com.tzw.mq.MqProducer;
+import com.tzw.mq.MqTopics;
 import com.tzw.packet.MsgPacket;
 import com.tzw.pb.Message;
 import org.slf4j.Logger;
@@ -52,7 +53,7 @@ public class MatchHandler {
         // 发布匹配请求到 MQ
         if (mqProducer != null) {
             MatchCreateEvent event = new MatchCreateEvent(playerId, DEFAULT_MATCH_MODE);
-            mqProducer.send("match.create", event);
+            mqProducer.send(MqTopics.MATCH_CREATE, event);
             log.info("[GrowthActor-{}] published match.create event", playerId);
         } else {
             log.warn("[GrowthActor-{}] mqProducer not available", playerId);

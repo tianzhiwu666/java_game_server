@@ -6,6 +6,7 @@ import com.tzw.mq.MatchCreateEvent;
 import com.tzw.mq.MatchReadyEvent;
 import com.tzw.mq.MatchResultEvent;
 import com.tzw.mq.MqProducer;
+import com.tzw.mq.MqTopics;
 import com.tzw.mq.TypedMqConsumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -97,7 +98,7 @@ public class MatchService {
      * 订阅匹配创建事件
      */
     private void subscribeMatchCreate() {
-        mqConsumer.subscribeTyped("match.create", MatchCreateEvent.class, this::handleMatchCreate);
+        mqConsumer.subscribeTyped(MqTopics.MATCH_CREATE, MatchCreateEvent.class, this::handleMatchCreate);
         log.info("[MatchService] subscribed to match.create");
     }
 
@@ -167,7 +168,7 @@ public class MatchService {
         for (Long playerId : players) {
             String token = generateToken(playerId, roomId);
             MatchReadyEvent readyEvent = new MatchReadyEvent(roomId, playerId, roomHost, roomPort, token);
-            mqProducer.send("match.ready", readyEvent);
+            mqProducer.send(MqTopics.MATCH_READY, readyEvent);
         }
     }
 
@@ -193,7 +194,7 @@ public class MatchService {
             long expGain = win ? 100 : 30;
             long goldGain = win ? 50 : 10;
             MatchResultEvent resultEvent = new MatchResultEvent(roomId, playerId, win, expGain, goldGain, 0);
-            mqProducer.send("match.result", resultEvent);
+            mqProducer.send(MqTopics.MATCH_RESULT, resultEvent);
         }
     }
 

@@ -7,6 +7,7 @@ import com.tzw.logic.growth.handler.UpgradeHandler;
 import com.tzw.mq.MatchReadyEvent;
 import com.tzw.mq.MatchResultEvent;
 import com.tzw.mq.MqProducer;
+import com.tzw.mq.MqTopics;
 import com.tzw.network.Conn;
 import com.tzw.network.ConnCallback;
 import com.tzw.network.Packet;
@@ -18,6 +19,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -221,7 +223,7 @@ public class GrowthActor implements Runnable, ConnCallback {
         while (running) {
             try {
                 // 1. 处理消息（带超时以便检查其他队列）
-                MsgPacket msg = msgQ.poll(100, java.util.concurrent.TimeUnit.MILLISECONDS);
+                MsgPacket msg = msgQ.poll(100, TimeUnit.MILLISECONDS);
                 if (msg != null) {
                     processMsg(msg);
                 }
@@ -301,12 +303,12 @@ public class GrowthActor implements Runnable, ConnCallback {
         log.info("[GrowthActor-{}] processEvent type={}", playerId, event.type());
 
         switch (event.type()) {
-            case "match.ready" -> {
+            case MqTopics.MATCH_READY -> {
                 if (event.payload() instanceof MatchReadyEvent e) {
                     matchHandler.handleMatchReady(e);
                 }
             }
-            case "match.result" -> {
+            case MqTopics.MATCH_RESULT -> {
                 if (event.payload() instanceof MatchResultEvent e) {
                     matchHandler.handleMatchResult(e);
                 }

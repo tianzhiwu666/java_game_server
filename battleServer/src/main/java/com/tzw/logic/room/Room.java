@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -348,7 +349,7 @@ public class Room implements ConnCallback, GameListener {
 
                 // 3. 处理消息（带超时以便检查 tick）
                 // 使用 poll 而非 take，确保不会无限阻塞
-                PacketWrapper pw = msgQ.poll(waitMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+                PacketWrapper pw = msgQ.poll(waitMs, TimeUnit.MILLISECONDS);
                 if (pw != null) {
                     game.processMsg(pw.playerId, pw.packet);
                 }
