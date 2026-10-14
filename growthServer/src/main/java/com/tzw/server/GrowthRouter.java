@@ -127,7 +127,8 @@ public class GrowthRouter implements ConnCallback {
     @Override
     public boolean onMessage(Conn conn, Packet packet) {
         MsgPacket msg = (MsgPacket) packet;
-        Message.ID msgId = Message.ID.forNumber(msg.getMessageID());
+        // 消息 ID 在 wire 上是无符号单字节（养成段 200~242 会溢出为负），须 & 0xFF 还原
+        Message.ID msgId = Message.ID.forNumber(msg.getMessageID() & 0xFF);
 
         log.info("[GrowthRouter] onMessage [{}] msg=[{}]",
                 conn.remoteAddress(), msgId);

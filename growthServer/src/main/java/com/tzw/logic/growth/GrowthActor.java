@@ -262,7 +262,8 @@ public class GrowthActor implements Runnable, ConnCallback {
      * @param msg 消息包
      */
     private void processMsg(MsgPacket msg) {
-        Message.ID msgId = Message.ID.forNumber(msg.getMessageID());
+        // 消息 ID 在 wire 上是无符号单字节（养成段 200~242 会溢出为负），须 & 0xFF 还原
+        Message.ID msgId = Message.ID.forNumber(msg.getMessageID() & 0xFF);
         if (msgId == null) {
             return;
         }
