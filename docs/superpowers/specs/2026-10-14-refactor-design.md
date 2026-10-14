@@ -50,8 +50,8 @@
 探针 API：
 ```java
 // 构造 fake Conn 并收集刷出的字节
-static FakeConn captureConn()            // writer 收集 byte[]，可 flushSendQueue() 排空
-static List<Captured> drain(Conn conn)   // flush 后用 MsgProtocol 反解为 (msgID, protobuf body)
+static Conn captureConn()                // writer 将 serialize() 字节收集到探针内部缓冲
+static List<Captured> drain(Conn conn)   // 调 flushSendQueue() 排空，再用 MsgProtocol.decode(Unpooled.wrappedBuffer(...)) 反解
 record Captured(int msgID, byte[] body)
 ```
 
@@ -134,7 +134,7 @@ final class FrameBatchPacker {
 
 | 项 | 做法 |
 |---|---|
-| MQ topic 硬编码 | 新增 `core/src/main/java/com/tzw/mq/MqTopics.java`：`public static final String MATCH_CREATE/MATCH_READY/MATCH_RESULT`；替换 growthServer/battleServer **生产代码**中的 14 处字面量；测试与 proto 注释中的字面量保留（黑盒验证） |
+| MQ topic 硬编码 | 新增 `core/src/main/java/com/tzw/mq/MqTopics.java`：`public static final String MATCH_CREATE/MATCH_READY/MATCH_RESULT`；替换 growthServer/battleServer **生产代码**中的 10 处字面量（GrowthRouter×4、GrowthActor×3、MatchService×3）；测试中的 5 处字面量与 proto 注释保留（黑盒验证） |
 | 内联全限定名 | `GrowthActor` 的 `java.util.Collections`/`ArrayList`/`List`/`java.util.concurrent.TimeUnit`、`Room.run` 的 `java.util.concurrent.TimeUnit` 等统一改为 import |
 | 日志风格 | 新 Handler 类沿用既有前缀（`[GrowthActor-{id}]`）；旧日志文本不动 |
 | CLAUDE.md | 模块职责段补充：growthServer 的 handler 拆分结构、`MqTopics`、`FrameBatchPacker`；不改动其余过时内容 |
