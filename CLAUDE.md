@@ -69,11 +69,13 @@ java -jar battleServer/target/battleServer-1.0.0-SNAPSHOT.jar [端口]
 **core** — 被所有模块依赖
 - `network/`：TCP/UDP 网络层（`Server` KCP、`TcpServer` TCP、`Conn` 连接抽象）
 - `packet/`：应用层协议拆包（`MsgProtocol`：`[2B dataLen][1B msgID][protobuf body]`）
-- `mq/`：MQ 接口（`MqProducer`/`MqConsumer`/`TypedMqConsumer`）+ 事件类 + `InMemoryMqAdapter`（进程内实现）
+- `mq/`：MQ 接口（`MqProducer`/`MqConsumer`/`TypedMqConsumer`）+ 事件类 + `MqTopics`（topic 常量，wire 契约不可变）+ `InMemoryMqAdapter`（进程内实现）
 - `proto/`：`message.proto` → 生成 `com.tzw.pb.Message`
 
 **growthServer** — 养成业务
-- `GrowthActor`：每玩家单线程 Actor，处理升级/装备/抽卡/匹配
+- `GrowthActor`：每玩家单线程 Actor（事件循环 + 消息分发，业务已拆出）
+- `GrowthMessenger`：连接绑定与向客户端发包/推送的唯一出口
+- `handler/`：业务处理器 `UpgradeHandler`/`EquipHandler`/`GachaHandler`/`MatchHandler`（构造注入 state+messenger，只在 Actor 单线程调用）
 - `GrowthSessionManager`：管理所有玩家 Actor 的生命周期
 - `GrowthRouter`：TCP 第一层分发（GrowthAuth 鉴权 + 心跳）
 
@@ -81,6 +83,7 @@ java -jar battleServer/target/battleServer-1.0.0-SNAPSHOT.jar [端口]
 - `Room` / `RoomManager`：房间 Actor，30Hz tick 驱动帧同步
 - `Game`：状态机 `READY→GAMING→OVER→STOP`，帧广播
 - `Lockstep`：稀疏帧映射，重复输入检测
+- `FrameBatchPacker`：帧批量打包（增量广播与断线重连重放共用）
 - `Router`：KCP 第一层分发（Connect 握手 + 心跳）
 - `MatchService`：匹配逻辑（已迁移但未接入入口，待接线）
 
@@ -96,7 +99,9 @@ java -jar battleServer/target/battleServer-1.0.0-SNAPSHOT.jar [端口]
 ### 测试
 
 - 框架：JUnit 5（`junit-jupiter`）
-- 当前覆盖：`battleServer/src/test/java/com/tzw/logic/game/LockstepTest.java`（9 个用例，覆盖 Lockstep 帧缓冲核心逻辑）
+- 当前覆盖：`LockstepTest`（9）、`FrameBatchPackerTest`（4）、`GameProtocolTest`（7）、`MatchServiceTest`（4）、`GrowthActorProtocolTest`（8）、dao 的 Redis 集成测试（无 Redis 时自动跳过）
+- **行为基线测试**（`GameProtocolTest`/`GrowthActorProtocolTest`）锁定客户端可见字节（含历史遗留的 `ERR_RoomState` 用法）；修改业务代码时禁止为迁就实现而改断言
+- 测试捕获发送用 `com.tzw.network.SendQueueProbe`（同包探针，battleServer/growthServer 测试目录各一份拷贝）
 - 运行测试前需先 `mvn install -DskipTests` 安装依赖模块到本地仓库
 
 ## 注意事项
